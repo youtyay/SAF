@@ -7,23 +7,19 @@ function bytesToBigInt(bytes) {
 }
 
 function bigIntToBytes(n, length) {
-    const hex = n.toString(16);
-    const bytes = new Uint8Array(length);
-    let hexIndex = hex.length - 1;
+    n = BigInt(n);
+    if (n === 0n) {
+        return new Uint8Array(length).fill(0);
+    }
 
-    for (let i = length - 1; i >= 0; i--) {
-        const byteHex = hex.substring(Math.max(0, hexIndex - 1), hexIndex + 1);
-        bytes[i] = parseInt(byteHex || '00', 16);
-        hexIndex -= 2;
+    let hex = n.toString(16);
+    hex = hex.padStart(length * 2, '0');
+
+    const bytes = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+        bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
     }
     return bytes;
-}
-
-function gcd(a, b) {
-    while (b !== 0n) {
-        [a, b] = [b, a % b];
-    }
-    return a;
 }
 
 function extendedGcd(a, b) {
@@ -215,7 +211,7 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
         }
 
         const signed_hash_int = power(data_hash_int, d_sig, n_sig);
-        hash_payload_bytes = bigIntToBytes(signed_hash_int, Math.ceil(n_sig.toString(2).length / 8));
+        hash_payload_bytes = (signed_hash_int, Math.ceil(n_sig.toString(2).length / 8));
     } else {
         let data_hash_to_encrypt = data_hash_bytes;
         const recipient_key_byte_length = Math.ceil(n_recipient.toString(2).length / 8);
@@ -232,7 +228,7 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
         }
 
         const encrypted_hash_int = power(bytesToBigInt(data_hash_to_encrypt), e_recipient, n_recipient);
-        hash_payload_bytes = bigIntToBytes(encrypted_hash_int, recipient_key_byte_length);
+        hash_payload_bytes = (encrypted_hash_int, recipient_key_byte_length);
     }
 
     const keyByteLength_recipient = Math.ceil(n_recipient.toString(2).length / 8);
@@ -242,7 +238,14 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
         throw new Error("Recipient's key modulus is too small to encrypt data. Increase key length (minimum 2 bytes, i.e., 16 bits).");
     }
 
-    const padding_len = maxBlockSize - (dataBytes.length % maxBlockSize);
+    const remainingBytes = dataBytes.length % maxBlockSize;
+    let padding_len = 0;
+    if (remainingBytes === 0) {
+        padding_len = maxBlockSize;
+    } else {
+        padding_len = maxBlockSize - remainingBytes;
+    }
+
     const data_bytes_padded = new Uint8Array(dataBytes.length + padding_len);
     data_bytes_padded.set(dataBytes);
     for (let i = dataBytes.length; i < data_bytes_padded.length; i++) {
@@ -323,47 +326,59 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
         await new Promise(resolve => setTimeout(resolve, 0));
     }
 
-    const block_size_bytes_for_data = Math.max(1, Math.ceil((n_recipient.toString(2).length - 1) / 8));
+    const actual_decrypted_block_byte_length = ciphertext_block_size;
 
     let decrypted_full_data_array = [];
     for (const block_val of decrypted_blocks) {
-        decrypted_full_data_array.push(bigIntToBytes(block_val, block_size_bytes_for_data));
+        decrypted_full_data_array.push(bigIntToBytes(block_val, actual_decrypted_block_byte_length));
     }
     const decrypted_full_data = new Uint8Array(decrypted_full_data_array.flatMap(arr => Array.from(arr)));
 
-    if (decrypted_full_data.length < padding_len) {
-        throw new Error("Invalid format: padding length is greater than available bytes after decryption. Data corrupted or wrong key.");
-    }
+    const final_decrypted_data_without_padding = new Uint8Array(decrypted_full_data);
+    let final_decoded_data;
 
-    const final_decrypted_data_with_padding = decrypted_full_data.slice(0, decrypted_full_data.length);
-    let actual_padding_len = final_decrypted_data_with_padding[final_decrypted_data_with_padding.length - 1];
-
-    if (actual_padding_len > block_size_bytes_for_data || actual_padding_len < 0 || isNaN(actual_padding_len)) {
-        console.warn("Warning: Invalid padding value. Data might be corrupted or wrong key used.");
-        actual_padding_len = padding_len;
-    }
-    
-    for (let i = 1; i <= actual_padding_len; i++) {
-        if (final_decrypted_data_with_padding[final_decrypted_data_with_padding.length - i] !== actual_padding_len) {
-            console.warn("Warning: Inconsistent padding bytes. Data might be corrupted or wrong key used.");
-            actual_padding_len = padding_len;
-            break;
-        }
-    }
-
-    const final_decrypted_data = decrypted_full_data.slice(0, -actual_padding_len);
-
-    if (final_decrypted_data.length !== original_data_len) {
+    if (final_decrypted_data_without_padding.length < original_data_len) {
         console.warn(
-            "Warning: Decrypted data length does not match original length. Data may have been altered or corrupted."
+            "Warning: Decrypted data length is less than original length. Data may have been altered or corrupted. Truncating."
         );
-        const truncated_decrypted_data = final_decrypted_data.slice(0, original_data_len);
-        await verifyIntegrity(truncated_decrypted_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
-        return new TextDecoder().decode(truncated_decrypted_data);
+        final_decoded_data = final_decrypted_data_without_padding;
+    } else {
+        let detected_padding_len = final_decrypted_data_without_padding[final_decrypted_data_without_padding.length - 1];
+
+        let padding_is_valid = true;
+        if (detected_padding_len <= 0 || detected_padding_len > actual_decrypted_block_byte_length) {
+            padding_is_valid = false;
+        } else {
+            for (let i = 1; i <= detected_padding_len; i++) {
+                if (final_decrypted_data_without_padding[final_decrypted_data_without_padding.length - i] !== detected_padding_len) {
+                    padding_is_valid = false;
+                    break;
+                }
+            }
+        }
+
+        if (!padding_is_valid) {
+            console.warn("Warning: Invalid padding detected. Data might be corrupted or wrong key used. Attempting to use header's padding length.");
+            detected_padding_len = padding_len;
+            if (detected_padding_len > final_decrypted_data_without_padding.length) {
+                detected_padding_len = 0;
+                console.warn("Header padding length also invalid. No padding removed.");
+            }
+        }
+
+        final_decoded_data = final_decrypted_data_without_padding.slice(0, final_decrypted_data_without_padding.length - detected_padding_len);
     }
 
-    await verifyIntegrity(final_decrypted_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
-    return new TextDecoder().decode(final_decrypted_data);
+    if (final_decoded_data.length !== original_data_len) {
+        console.warn(
+            `Warning: Final decrypted data length (${final_decoded_data.length}) after padding removal does not match original length (${original_data_len}). ` +
+            "Data may have been altered or corrupted. Truncating to original length for integrity check."
+        );
+        final_decoded_data = final_decoded_data.slice(0, original_data_len);
+    }
+
+    await verifyIntegrity(final_decoded_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
+    return new TextDecoder().decode(final_decoded_data);
 }
 
 async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key) {
