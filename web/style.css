@@ -1,0 +1,192 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 900px;
+    margin: 20px auto;
+    background-color: #fff;
+    padding: 25px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+h1, h2 {
+    color: #0056b3;
+    text-align: center;
+    margin-bottom: 20px;
+    margin-top: 0;
+}
+
+hr {
+    border: 0;
+    height: 1px;
+    background: #e0e0e0;
+    margin: 30px 0;
+}
+
+.section {
+    background-color: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 20px;
+    margin-bottom: 30px;
+}
+
+.section h2 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+    color: #555;
+}
+
+input[type="number"],
+textarea,
+select {
+    width: calc(100% - 22px);
+    padding: 10px;
+    margin-bottom: 18px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+    box-sizing: border-box;
+    resize: vertical;
+}
+
+button {
+    background-color: #007bff;
+    color: white;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    margin-top: 5px;
+    margin-right: 10px;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+    min-width: 120px;
+}
+
+button:hover {
+    background-color: #0056b3;
+    transform: translateY(-1px);
+}
+
+button:active {
+    background-color: #004085;
+    transform: translateY(0);
+}
+
+button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+.button-group {
+    margin-top: 15px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.button-group button {
+    margin-top: 0;
+    margin-right: 0;
+}
+
+.status-message {
+    margin-top: 15px;
+    padding: 10px 0;
+    font-weight: bold;
+}
+
+.status-message.success {
+    color: #155724;
+}
+
+.status-message.error {
+    color: #721c24;
+}
+
+.warning {
+    color: #856404;
+    background-color: #fff3cd;
+    border-color: #ffeeba;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 25px;
+    line-height: 1.5;
+}
+
+.flex-row {
+    display: flex;
+    gap: 25px;
+    margin-top: 20px;
+}
+
+.flex-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.flex-item textarea {
+    flex-grow: 1;
+    height: auto;
+    min-height: 120px;
+}
+
+.key-output-group .flex-item textarea {
+    min-height: 180px;
+}
+
+.checkbox-container {
+    display: flex;
+    align-items: center;
+    margin-top: 15px;
+    margin-bottom: 18px;
+}
+
+.checkbox-container input[type="checkbox"] {
+    margin-right: 10px;
+    width: auto;
+    margin-bottom: 0;
+    min-width: unset;
+}
+
+.checkbox-container label {
+    margin-bottom: 0;
+    font-weight: normal;
+    cursor: pointer;
+}
+
+.toggle-container {
+    padding: 15px;
+    background-color: #f0f0f0;
+    border: 1px dashed #ccc;
+    border-radius: 5px;
+    margin-top: 15px;
+    margin-bottom: 20px;
+}
+
+.toggle-container label, .toggle-container textarea, .toggle-container .button-group {
+    margin-bottom: 10px;
+    margin-top: 10px;
+}
+
+.toggle-container label:first-child {
+    margin-top: 0;
+}
