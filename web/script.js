@@ -7,14 +7,17 @@ function bytesToBigInt(bytes) {
 }
 
 function bigIntToBytes(n, length) {
-    const hex = n.toString(16);
-    const bytes = new Uint8Array(length);
-    let hexIndex = hex.length - 1;
+    n = BigInt(n);
+    if (n === 0n) {
+        return new Uint8Array(length).fill(0);
+    }
 
-    for (let i = length - 1; i >= 0; i--) {
-        const byteHex = hex.substring(Math.max(0, hexIndex - 1), hexIndex + 1);
-        bytes[i] = parseInt(byteHex || '00', 16);
-        hexIndex -= 2;
+    let hex = n.toString(16);
+    hex = hex.padStart(length * 2, '0');
+
+    const bytes = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+        bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
     }
     return bytes;
 }
@@ -242,7 +245,14 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
         throw new Error("Recipient's key modulus is too small to encrypt data. Increase key length (minimum 2 bytes, i.e., 16 bits).");
     }
 
-    const padding_len = maxBlockSize - (dataBytes.length % maxBlockSize);
+    const remainingBytes = dataBytes.length % maxBlockSize;
+    let padding_len;
+    if (remainingBytes === 0) {
+        padding_len = maxBlockSize;
+    } else {
+        padding_len = maxBlockSize - remainingBytes;
+    }
+
     const data_bytes_padded = new Uint8Array(dataBytes.length + padding_len);
     data_bytes_padded.set(dataBytes);
     for (let i = dataBytes.length; i < data_bytes_padded.length; i++) {
@@ -309,6 +319,9 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
     const encrypted_payload_only = encrypted_bytes_payload.slice(10 + hash_payload_len);
 
     const ciphertext_block_size = Math.ceil(n_recipient.toString(2).length / 8);
+    // Это размер блока, который БЫЛ ЗАШИФРОВАН.
+    // maxBlockSize из encryptData = keyByteLength_recipient - 1.
+    const original_data_block_size_before_encryption = ciphertext_block_size - 1;
 
     if (encrypted_payload_only.length % ciphertext_block_size !== 0) {
         throw new Error("Length of encrypted data (message) is not a multiple of block size. Data might be corrupted or wrong key used.");
@@ -323,47 +336,55 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
         await new Promise(resolve => setTimeout(resolve, 0));
     }
 
-    const block_size_bytes_for_data = Math.max(1, Math.ceil((n_recipient.toString(2).length - 1) / 8));
-
     let decrypted_full_data_array = [];
     for (const block_val of decrypted_blocks) {
-        decrypted_full_data_array.push(bigIntToBytes(block_val, block_size_bytes_for_data));
+        decrypted_full_data_array.push(bigIntToBytes(block_val, original_data_block_size_before_encryption));
     }
     const decrypted_full_data = new Uint8Array(decrypted_full_data_array.flatMap(arr => Array.from(arr)));
 
-    if (decrypted_full_data.length < padding_len) {
-        throw new Error("Invalid format: padding length is greater than available bytes after decryption. Data corrupted or wrong key.");
-    }
+    let final_decoded_data;
 
-    const final_decrypted_data_with_padding = decrypted_full_data.slice(0, decrypted_full_data.length);
-    let actual_padding_len = final_decrypted_data_with_padding[final_decrypted_data_with_padding.length - 1];
+    if (decrypted_full_data.length < original_data_len + padding_len) {
+        console.warn("Warning: Decrypted payload is shorter than expected (original data + padding). Data might be corrupted or wrong key used. Attempting partial recovery.");
+        final_decoded_data = decrypted_full_data;
+    } else {
+        let detected_padding_val = decrypted_full_data[decrypted_full_data.length - 1];
 
-    if (actual_padding_len > block_size_bytes_for_data || actual_padding_len < 0 || isNaN(actual_padding_len)) {
-        console.warn("Warning: Invalid padding value. Data might be corrupted or wrong key used.");
-        actual_padding_len = padding_len;
-    }
-    
-    for (let i = 1; i <= actual_padding_len; i++) {
-        if (final_decrypted_data_with_padding[final_decrypted_data_with_padding.length - i] !== actual_padding_len) {
-            console.warn("Warning: Inconsistent padding bytes. Data might be corrupted or wrong key used.");
-            actual_padding_len = padding_len;
-            break;
+        let padding_is_valid = true;
+        if (detected_padding_val <= 0 || detected_padding_val > original_data_block_size_before_encryption) {
+            padding_is_valid = false;
+        } else {
+            for (let i = 1; i <= detected_padding_val; i++) {
+                if (decrypted_full_data[decrypted_full_data.length - i] !== detected_padding_val) {
+                    padding_is_valid = false;
+                    break;
+                }
+            }
         }
+
+        if (!padding_is_valid) {
+            console.warn("Warning: Invalid padding detected. Data might be corrupted or wrong key used. Reverting to header's padding length.");
+            detected_padding_val = padding_len;
+            if (detected_padding_val > decrypted_full_data.length) {
+                detected_padding_val = 0;
+                console.warn("Header padding length also invalid or too large. No padding removed.");
+            }
+        }
+
+        final_decoded_data = decrypted_full_data.slice(0, decrypted_full_data.length - detected_padding_val);
     }
 
-    const final_decrypted_data = decrypted_full_data.slice(0, -actual_padding_len);
-
-    if (final_decrypted_data.length !== original_data_len) {
+    // Окончательная проверка длины и обрезка до original_data_len
+    if (final_decoded_data.length !== original_data_len) {
         console.warn(
-            "Warning: Decrypted data length does not match original length. Data may have been altered or corrupted."
+            `Warning: Final decrypted data length (${final_decoded_data.length}) after padding removal does not match original length (${original_data_len}). ` +
+            "Data may have been altered or corrupted. Truncating to original length for integrity check."
         );
-        const truncated_decrypted_data = final_decrypted_data.slice(0, original_data_len);
-        await verifyIntegrity(truncated_decrypted_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
-        return new TextDecoder().decode(truncated_decrypted_data);
+        final_decoded_data = final_decoded_data.slice(0, original_data_len);
     }
 
-    await verifyIntegrity(final_decrypted_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
-    return new TextDecoder().decode(final_decrypted_data);
+    await verifyIntegrity(final_decoded_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
+    return new TextDecoder().decode(final_decoded_data);
 }
 
 async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key) {
