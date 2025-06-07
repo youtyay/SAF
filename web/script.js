@@ -93,7 +93,6 @@ function getRandomBigInt(min, max) {
     }
 }
 
-
 async function isPrimeMillerRabin(n, k = 5) {
     if (n < 2n) return false;
     if (n === 2n || n === 3n) return true;
@@ -129,7 +128,9 @@ async function isPrimeMillerRabin(n, k = 5) {
     return true;
 }
 
-async function generatePrime(bits) {
+// --- Prime Generation ---
+
+async function generatePrime(bits, statusElement, stage, startTime) {
     let num;
     const maxAttempts = 5000;
     const minVal = 2n ** BigInt(bits - 1);
@@ -147,6 +148,9 @@ async function generatePrime(bits) {
             return num;
         }
         if (i % 100 === 0) {
+            const progress = Math.min(99, Math.floor((i / maxAttempts) * 100));
+            const currentTime = (performance.now() - startTime).toFixed(2);
+            statusElement.textContent = `Generating ${stage} (${progress}%) \t ${currentTime} ms`;
             await new Promise(resolve => setTimeout(resolve, 0));
         }
     }
@@ -155,52 +159,67 @@ async function generatePrime(bits) {
 
 // --- Main SAF functions ---
 
-async function generateKeypair(bits) {
+async function generateKeypair(bits, statusElement) {
+    const startTime = performance.now();
+    statusElement.classList.remove('success', 'error', 'warning');
+    statusElement.textContent = `Starting key generation. This may take several seconds for larger keys... \t 0.00 ms`;
+
     const primeBits = Math.floor(bits / 2);
     if (primeBits < 16) {
         throw new Error("Key length is too small for prime generation. Minimum 32 bits for key (16 bits per prime factor).");
     }
 
-    const statusElement = document.getElementById('keyGenStatus');
-    statusElement.textContent = "Starting key generation. This may take several seconds for larger keys...";
-    statusElement.classList.remove('success', 'error');
+    let p;
+    let q;
+    try {
+        p = await generatePrime(primeBits, statusElement, 'p', startTime);
+        statusElement.textContent = `Generating q... \t ${(performance.now() - startTime).toFixed(2)} ms`;
+        q = await generatePrime(primeBits, statusElement, 'q', startTime);
 
-    statusElement.textContent = "Generating p...";
-    let p = await generatePrime(primeBits);
-    statusElement.textContent = "Generating q...";
-    let q = await generatePrime(primeBits);
+        while (p === q) {
+            statusElement.textContent = `p equals q, generating new q... \t ${(performance.now() - startTime).toFixed(2)} ms`;
+            q = await generatePrime(primeBits, statusElement, 'q', startTime);
+        }
 
-    while (p === q) {
-        statusElement.textContent = "p equals q, generating new q...";
-        q = await generatePrime(primeBits);
+        const n = p * q;
+        const phi = (p - 1n) * (q - 1n);
+
+        const e = 65537n;
+        if (gcd(e, phi) !== 1n) {
+            throw new Error("Failed to find e, coprime to phi. Try again.");
+        }
+
+        statusElement.textContent = `Calculating d... \t ${(performance.now() - startTime).toFixed(2)} ms`;
+        const d = modInverse(e, phi);
+
+        const endTime = performance.now();
+        const timeTaken = (endTime - startTime).toFixed(2);
+        statusElement.textContent = `Keys generated! (${timeTaken} ms)`;
+        statusElement.classList.add('success');
+        return {
+            publicKey: { e: e, n: n },
+            privateKey: { d: d, n: n }
+        };
+    } catch (error) {
+        const endTime = performance.now();
+        const timeTaken = (endTime - startTime).toFixed(2);
+        statusElement.textContent = `Error generating keys: ${error.message} (${timeTaken} ms)`;
+        statusElement.classList.add('error');
+        throw error;
     }
-
-    const n = p * q;
-    const phi = (p - 1n) * (q - 1n);
-
-    const e = 65537n;
-    if (gcd(e, phi) !== 1n) {
-        throw new Error("Failed to find e, coprime to phi. Try again.");
-    }
-
-    statusElement.textContent = "Calculating d...";
-    const d = modInverse(e, phi);
-
-    statusElement.textContent = "Keys generated!";
-    return {
-        publicKey: { e: e, n: n },
-        privateKey: { d: d, n: n }
-    };
 }
 
+async function encryptData(dataBytes, public_key_recipient, private_signing_key = null, statusElement, startTime) {
+    statusElement.classList.remove('success', 'error');
 
-async function encryptData(dataBytes, public_key_recipient, private_signing_key = null) {
     const e_recipient = BigInt(public_key_recipient.e);
     const n_recipient = BigInt(public_key_recipient.n);
 
+    statusElement.textContent = `Computing data hash (0%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const data_hash_buffer = await crypto.subtle.digest('SHA-256', dataBytes);
     const data_hash_bytes = new Uint8Array(data_hash_buffer);
     const data_hash_int = bytesToBigInt(data_hash_bytes);
+    statusElement.textContent = `Data hash computed (10%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
 
     let is_signed_message_flag = 0;
     let hash_payload_bytes;
@@ -216,9 +235,10 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
                 `It is recommended to use a private key with a modulus N length of at least 256 bits for SHA-256.`
             );
         }
-
+        statusElement.textContent = `Signing hash (20%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
         const signed_hash_int = power(data_hash_int, d_sig, n_sig);
         hash_payload_bytes = bigIntToBytes(signed_hash_int, Math.ceil(n_sig.toString(2).length / 8));
+        statusElement.textContent = `Hash signed (30%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     } else {
         let data_hash_to_encrypt = data_hash_bytes;
         const recipient_key_byte_length = Math.ceil(n_recipient.toString(2).length / 8);
@@ -233,9 +253,10 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
                 throw new Error("Public key modulus is too small to encrypt even part of the hash.");
             }
         }
-
+        statusElement.textContent = `Encrypting hash for integrity (20%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
         const encrypted_hash_int = power(bytesToBigInt(data_hash_to_encrypt), e_recipient, n_recipient);
         hash_payload_bytes = bigIntToBytes(encrypted_hash_int, recipient_key_byte_length);
+        statusElement.textContent = `Hash encrypted (30%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     }
 
     const keyByteLength_recipient = Math.ceil(n_recipient.toString(2).length / 8);
@@ -260,11 +281,14 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
     }
 
     const encrypted_blocks = [];
+    const totalBlocks = Math.ceil(data_bytes_padded.length / maxBlockSize);
     for (let i = 0; i < data_bytes_padded.length; i += maxBlockSize) {
         const block = data_bytes_padded.slice(i, i + maxBlockSize);
         const m = bytesToBigInt(block);
         const c = power(m, e_recipient, n_recipient);
         encrypted_blocks.push(c);
+        const progress = Math.min(100, 30 + Math.floor(((i / maxBlockSize) / totalBlocks) * 70));
+        statusElement.textContent = `Encrypting data blocks (${progress}%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
         await new Promise(resolve => setTimeout(resolve, 0));
     }
 
@@ -290,10 +314,17 @@ async function encryptData(dataBytes, public_key_recipient, private_signing_key 
         ...encrypted_payload_bytes
     ]);
 
+    const endTime = performance.now();
+    const timeTaken = (endTime - startTime).toFixed(2);
+    statusElement.textContent = `Message successfully encrypted! (${timeTaken} ms)`;
+    statusElement.classList.add('success');
     return btoa(String.fromCharCode(...full_encrypted_bytes));
 }
 
-async function decryptData(encryptedBase64, private_key_recipient, public_signing_key = null) {
+async function decryptData(encryptedBase64, private_key_recipient, public_signing_key = null, statusElement, startTime) {
+    statusElement.classList.remove('success', 'error', 'warning');
+
+    statusElement.textContent = `Parsing encrypted data (0%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const d_recipient = BigInt(private_key_recipient.d);
     const n_recipient = BigInt(private_key_recipient.n);
 
@@ -317,6 +348,7 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
 
     const hash_payload_bytes = encrypted_bytes_payload.slice(10, 10 + hash_payload_len);
     const encrypted_payload_only = encrypted_bytes_payload.slice(10 + hash_payload_len);
+    statusElement.textContent = `Headers parsed (10%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
 
     const ciphertext_block_size = Math.ceil(n_recipient.toString(2).length / 8);
     const original_data_block_size_before_encryption = ciphertext_block_size - 1;
@@ -326,19 +358,24 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
     }
 
     const decrypted_blocks = [];
+    const totalBlocks = encrypted_payload_only.length / ciphertext_block_size;
     for (let i = 0; i < encrypted_payload_only.length; i += ciphertext_block_size) {
         const block_bytes = encrypted_payload_only.slice(i, i + ciphertext_block_size);
         const c = bytesToBigInt(block_bytes);
         const m = power(c, d_recipient, n_recipient);
         decrypted_blocks.push(m);
+        const progress = Math.min(100, 10 + Math.floor(((i / ciphertext_block_size) / totalBlocks) * 60));
+        statusElement.textContent = `Decrypting data blocks (${progress}%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
         await new Promise(resolve => setTimeout(resolve, 0));
     }
+    statusElement.textContent = `Data blocks decrypted (70%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
 
     let decrypted_full_data_array = [];
     for (const block_val of decrypted_blocks) {
         decrypted_full_data_array.push(bigIntToBytes(block_val, original_data_block_size_before_encryption));
     }
     const decrypted_full_data = new Uint8Array(decrypted_full_data_array.flatMap(arr => Array.from(arr)));
+    statusElement.textContent = `Reassembling data (75%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
 
     let final_decoded_data;
 
@@ -371,6 +408,7 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
 
         final_decoded_data = decrypted_full_data.slice(0, decrypted_full_data.length - detected_padding_val);
     }
+    statusElement.textContent = `Padding removed (80%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
 
     if (final_decoded_data.length !== original_data_len) {
         console.warn(
@@ -380,22 +418,33 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
         final_decoded_data = final_decoded_data.slice(0, original_data_len);
     }
 
-    await verifyIntegrity(final_decoded_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key);
+    statusElement.textContent = `Verifying integrity (85%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
+
+    await verifyIntegrity(final_decoded_data, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key, statusElement, startTime);
+
+    const endTime = performance.now();
+    const timeTaken = (endTime - startTime).toFixed(2);
+    if (statusElement.classList.contains('success') || statusElement.classList.contains('error') || statusElement.classList.contains('warning')) {
+    } else {
+        statusElement.textContent = `Decryption complete. No integrity check performed. (${timeTaken} ms)`;
+        statusElement.classList.add('warning');
+    }
+
+
     return new TextDecoder().decode(final_decoded_data);
 }
 
-async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key) {
-    const statusElement = document.getElementById('decryptStatus');
-    statusElement.classList.remove('success', 'error');
+async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payload_bytes, private_key_recipient, public_signing_key, statusElement, startTime) {
+    statusElement.classList.remove('success', 'error', 'warning');
 
-    console.log(`Computed SHA-256 hash of decrypted data: ${Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', decrypted_data_bytes))).map(b => b.toString(16).padStart(2, '0')).join('')}`);
+    const initialTimeCheck = (performance.now() - startTime).toFixed(2);
 
     if (is_signed_flag === 1) {
         if (!public_signing_key) {
-            statusElement.textContent = "Error: Message is signed, but sender's public key is not provided for signature verification.";
-            statusElement.classList.add('error');
-            console.error("Error: Sender's public key is required to verify signature.");
-            return;
+            statusElement.textContent = `Data integrity check (signature): SKIPPED! Message is signed, but sender's public key was not provided. (${initialTimeCheck} ms)`;
+            statusElement.classList.add('warning');
+            console.warn("Data integrity check (signature): SKIPPED! Message is signed, but sender's public key was not provided.");
+            return false;
         }
 
         const e_sig = BigInt(public_signing_key.e);
@@ -404,33 +453,39 @@ async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payloa
         const signed_hash_int = bytesToBigInt(hash_payload_bytes);
 
         if (signed_hash_int >= n_sig) {
-            statusElement.textContent = "Signature verification error: Decrypted signed hash is too large for sender's public key modulus. Possibly wrong key or corruption.";
+            statusElement.textContent = `Signature verification FAILED: Decrypted signed hash is too large for sender's public key modulus. Possibly wrong key or corruption. (${initialTimeCheck} ms)`;
             statusElement.classList.add('error');
             console.error(
                 "Signature verification error: Decrypted signed hash is too large for sender's public key modulus. Possibly wrong key or corruption."
             );
-            return;
+            return false;
         }
-
+        statusElement.textContent = `Verifying signature (90%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
         const retrieved_hash_int = power(signed_hash_int, e_sig, n_sig);
         const retrieved_hash_bytes = bigIntToBytes(retrieved_hash_int, 32);
 
         const computed_hash_buffer = await crypto.subtle.digest('SHA-256', decrypted_data_bytes);
         const computed_hash_bytes = new Uint8Array(computed_hash_buffer);
 
+        const endTime = performance.now();
+        const timeTaken = (endTime - startTime).toFixed(2);
+
         if (retrieved_hash_bytes.every((val, i) => val === computed_hash_bytes[i])) {
-            statusElement.textContent = "Data integrity (signature) check: SUCCESS! Data has not been altered and is signed by the sender.";
+            statusElement.textContent = `Data integrity (signature) check: SUCCESS! Data has not been altered and is signed by the sender. (${timeTaken} ms)`;
             statusElement.classList.add('success');
+            return true;
         } else {
-            statusElement.textContent = "Data integrity (signature) check: FAILED! Data may have been altered or the wrong sender's key was used.";
+            statusElement.textContent = `Data integrity (signature) check: FAILED! Data may have been altered or the wrong sender's key was used. (${timeTaken} ms)`;
             statusElement.classList.add('error');
             console.warn(
                 "Data integrity (signature) check: FAILED! Data may have been altered or the wrong sender's key was used."
             );
             console.warn(`Expected hash from signature: ${Array.from(retrieved_hash_bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`);
             console.warn(`Computed hash of decrypted data: ${Array.from(computed_hash_bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`);
+            return false;
         }
     } else {
+        statusElement.textContent = `Verifying integrity (90%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
         const retrieved_hash_int = power(bytesToBigInt(hash_payload_bytes), private_key_recipient.d, private_key_recipient.n);
 
         const recipient_key_byte_length = Math.ceil(private_key_recipient.n.toString(2).length / 8);
@@ -442,15 +497,20 @@ async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payloa
         const computed_hash_full_bytes = new Uint8Array(computed_hash_buffer);
         const computed_hash_actual_bytes = computed_hash_full_bytes.slice(0, hash_part_len);
 
+        const endTime = performance.now();
+        const timeTaken = (endTime - startTime).toFixed(2);
+
         if (retrieved_hash_actual_bytes.every((val, i) => val === computed_hash_actual_bytes[i])) {
-            statusElement.textContent = "Data integrity (unsigned) check: SUCCESS! Data has not been corrupted.";
+            statusElement.textContent = `Data integrity (unsigned) check: SUCCESS! Data has not been corrupted. (${timeTaken} ms)`;
             statusElement.classList.add('success');
+            return true;
         } else {
-            statusElement.textContent = "Data integrity (unsigned) check: FAILED! Data may have been corrupted.";
+            statusElement.textContent = `Data integrity (unsigned) check: FAILED! Data may have been corrupted. (${timeTaken} ms)`;
             statusElement.classList.add('error');
             console.warn("Data integrity (unsigned) check: FAILED! Data may have been corrupted.");
             console.warn(`Expected hash from header: ${Array.from(retrieved_hash_actual_bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`);
             console.warn(`Computed hash of decrypted data (partial): ${Array.from(computed_hash_actual_bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`);
+            return false;
         }
     }
 }
@@ -458,22 +518,38 @@ async function verifyIntegrity(decrypted_data_bytes, is_signed_flag, hash_payloa
 
 // --- Hashing functions (Web Crypto API) ---
 
-async function computeHash(message, algorithm) {
+async function computeHash(message, algorithm, statusElement, startTime) {
+    statusElement.classList.remove('success', 'error');
+    statusElement.textContent = `Computing hash (0%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
+
     const textEncoder = new TextEncoder();
     const data = textEncoder.encode(message);
+    
+    statusElement.textContent = `Hashing data (50%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const hashBuffer = await crypto.subtle.digest(algorithm, data);
+    
+    statusElement.textContent = `Converting hash to hex (90%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hexHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+    const endTime = performance.now();
+    const timeTaken = (endTime - startTime).toFixed(2);
+    statusElement.textContent = `Hash (${algorithm}) successfully computed! (${timeTaken} ms)`;
+    statusElement.classList.add('success');
     return hexHash;
 }
 
 // --- Digital Signature and Verification functions ---
 
-async function signMessageRaw(message, privateKey) {
+async function signMessageRaw(message, privateKey, statusElement, startTime) {
+    statusElement.classList.remove('success', 'error');
+    statusElement.textContent = `Starting signing process (0%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
+
     const d = BigInt(privateKey.d);
     const n = BigInt(privateKey.n);
 
-    const hashHex = await computeHash(message, 'SHA-256');
+    statusElement.textContent = `Computing message hash (20%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
+    const hashHex = await computeHash(message, 'SHA-256', statusElement, startTime); 
     const hashBigInt = BigInt('0x' + hashHex);
 
     if (hashBigInt >= n) {
@@ -482,31 +558,57 @@ async function signMessageRaw(message, privateKey) {
             `Use a longer signing key (minimum 256 bits for SHA-256).`
         );
     }
+    statusElement.textContent = `Applying private key to hash (70%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const signatureBigInt = power(hashBigInt, d, n);
 
     const keyByteLength = Math.ceil(n.toString(2).length / 8);
+    statusElement.textContent = `Converting signature to bytes (90%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const signatureBytes = bigIntToBytes(signatureBigInt, keyByteLength);
+
+    const endTime = performance.now();
+    const timeTaken = (endTime - startTime).toFixed(2);
+    statusElement.textContent = `Message successfully signed! (${timeTaken} ms)`;
+    statusElement.classList.add('success');
     return btoa(String.fromCharCode(...signatureBytes));
 }
 
-async function verifySignatureRaw(message, signatureBase64, publicKey) {
+async function verifySignatureRaw(message, signatureBase64, publicKey, statusElement, startTime) {
+    statusElement.classList.remove('success', 'error');
+    statusElement.textContent = `Starting verification process (0%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
+
     const e = BigInt(publicKey.e);
     const n = BigInt(publicKey.n);
 
-    const expectedHashHex = await computeHash(message, 'SHA-256');
+    statusElement.textContent = `Computing expected hash (20%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
+    const expectedHashHex = await computeHash(message, 'SHA-256', statusElement, startTime); 
     const expectedHashBigInt = BigInt('0x' + expectedHashHex);
 
+    statusElement.textContent = `Parsing signature (50%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const signatureBytes = Uint8Array.from(atob(signatureBase64), c => c.charCodeAt(0));
     const signatureBigInt = bytesToBigInt(signatureBytes);
 
     if (signatureBigInt >= n) {
         console.warn("Signature value is greater than public key's modulus N. Likely an invalid signature or wrong public key.");
+        statusElement.textContent = `Signature is invalid: signature value too large. (${(performance.now() - startTime).toFixed(2)} ms)`;
+        statusElement.classList.add('error');
         return false;
     }
-
+    statusElement.textContent = `Decrypting signature with public key (70%) \t ${(performance.now() - startTime).toFixed(2)} ms`;
     const decryptedHashBigInt = power(signatureBigInt, e, n);
 
-    return expectedHashBigInt === decryptedHashBigInt;
+    const isValid = expectedHashBigInt === decryptedHashBigInt;
+    
+    const endTime = performance.now();
+    const timeTaken = (endTime - startTime).toFixed(2);
+
+    if (isValid) {
+        statusElement.textContent = `Signature is valid: message is unaltered and from the sender! (${timeTaken} ms)`;
+        statusElement.classList.add('success');
+    } else {
+        statusElement.textContent = `Signature is invalid: message has been altered or signature is not from this key. (${timeTaken} ms)`;
+        statusElement.classList.add('error');
+    }
+    return isValid;
 }
 
 
@@ -663,37 +765,33 @@ async function handleGenerateKeys() {
     const keyLength = parseInt(document.getElementById('keyLength').value);
     const statusElement = document.getElementById('keyGenStatus');
     statusElement.textContent = "Starting key generation...";
-    statusElement.classList.remove('success', 'error');
+    statusElement.classList.remove('success', 'error', 'warning');
     document.getElementById('publicKeyOutput').value = '';
     document.getElementById('privateKeyOutput').value = '';
 
+    const startTime = performance.now();
+
     if (keyLength < 512) {
-        statusElement.textContent = "Warning: Key length less than 512 bits is not recommended for security. Proceeding anyway...";
+        statusElement.textContent = `Warning: Key length less than 512 bits is not recommended for security. Proceeding anyway... \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.remove('success');
         statusElement.classList.add('warning');
     } else if (keyLength > 2048) {
-        statusElement.textContent = "Warning: Key length greater than 2048 bits may result in very slow generation and operation. Proceeding anyway...";
+        statusElement.textContent = `Warning: Key length greater than 2048 bits may result in very slow generation and operation. Proceeding anyway... \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.remove('success');
         statusElement.classList.add('warning');
     } else {
-        statusElement.textContent = "Starting generation. This may take some time...";
+        statusElement.textContent = `Starting generation. This may take some time... \t ${(performance.now() - startTime).toFixed(2)} ms`;
     }
 
-
     try {
-        const { publicKey, privateKey } = await generateKeypair(keyLength);
+        const { publicKey, privateKey } = await generateKeypair(keyLength, statusElement);
 
         const formattedPublicKey = formatKey(publicKey, 'PUBLIC');
         const formattedPrivateKey = formatKey(privateKey, 'PRIVATE');
 
         document.getElementById('publicKeyOutput').value = formattedPublicKey;
         document.getElementById('privateKeyOutput').value = formattedPrivateKey;
-        statusElement.textContent = "Keys successfully generated!";
-        statusElement.classList.add('success');
-
     } catch (error) {
-        statusElement.textContent = `Error generating keys: ${error.message}`;
-        statusElement.classList.add('error');
         console.error("Error generating keys:", error);
     }
 }
@@ -793,8 +891,8 @@ async function handleEncryptedFileUpload(fileInputId, targetTextAreaId) {
                 const encrypted_bytes_payload_for_check = Uint8Array.from(atob(rawEncryptedBase64), c => c.charCodeAt(0));
                 let is_signed_flag_from_file = 0;
                 if (encrypted_bytes_payload_for_check.length >= 6) {
-                     const header_main_view = new DataView(encrypted_bytes_payload_for_check.buffer, 0, 6);
-                     is_signed_flag_from_file = header_main_view.getUint8(5);
+                    const header_main_view = new DataView(encrypted_bytes_payload_for_check.buffer, 0, 6);
+                    is_signed_flag_from_file = header_main_view.getUint8(5);
                 }
 
                 const verifySignatureDecryptCheckbox = document.getElementById('verifySignatureDecryptCheckbox');
@@ -898,17 +996,19 @@ async function handleEncryptMessage() {
     const signAndEncrypt = document.getElementById('signAndEncryptCheckbox').checked;
     const privateKeyInputEncryptSign = document.getElementById('privateKeyInputEncryptSign').value;
     const statusElement = document.getElementById('encryptStatus');
-    statusElement.textContent = "Encrypting...";
+    
+    const startTime = performance.now();
+    statusElement.textContent = `Encrypting... \t ${(performance.now() - startTime).toFixed(2)} ms`;
     statusElement.classList.remove('success', 'error');
     document.getElementById('encryptedOutput').value = '';
 
     if (!message) {
-        statusElement.textContent = "Error: Please enter a message to encrypt.";
+        statusElement.textContent = `Error: Please enter a message to encrypt. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
     if (!publicKeyInput) {
-        statusElement.textContent = "Error: Please paste or upload the recipient's public key.";
+        statusElement.textContent = `Error: Please paste or upload the recipient's public key. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
@@ -932,11 +1032,9 @@ async function handleEncryptMessage() {
 
         const dataBytes = new TextEncoder().encode(message);
 
-        const rawEncryptedBase64 = await encryptData(dataBytes, publicKeyRecipient, privateKeySigner);
+        const rawEncryptedBase64 = await encryptData(dataBytes, publicKeyRecipient, privateKeySigner, statusElement, startTime);
         const formattedEncrypted = formatEncryptedMessage(rawEncryptedBase64);
         document.getElementById('encryptedOutput').value = formattedEncrypted;
-        statusElement.textContent = "Message successfully encrypted!";
-        statusElement.classList.add('success');
 
     } catch (error) {
         statusElement.textContent = `Encryption error: ${error.message}`;
@@ -951,17 +1049,19 @@ async function handleDecryptMessage() {
     const verifySignatureDecryptCheckbox = document.getElementById('verifySignatureDecryptCheckbox');
     const publicKeyInputDecryptVerify = document.getElementById('publicKeyInputDecryptVerify').value;
     const statusElement = document.getElementById('decryptStatus');
-    statusElement.textContent = "Decrypting...";
+
+    const startTime = performance.now();
+    statusElement.textContent = `Decrypting... \t ${(performance.now() - startTime).toFixed(2)} ms`;
     statusElement.classList.remove('success', 'error');
     document.getElementById('decryptedOutput').value = '';
 
     if (!encryptedMessageInput) {
-        statusElement.textContent = "Error: Please paste or upload an encrypted message.";
+        statusElement.textContent = `Error: Please paste or upload an encrypted message. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
     if (!privateKeyInput) {
-        statusElement.textContent = "Error: Please paste or upload the recipient's private key.";
+        statusElement.textContent = `Error: Please paste or upload the recipient's private key. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
@@ -976,37 +1076,40 @@ async function handleDecryptMessage() {
         const encrypted_bytes_payload_for_check = Uint8Array.from(atob(rawEncryptedBase64), c => c.charCodeAt(0));
         let is_signed_flag_from_file = 0;
         if (encrypted_bytes_payload_for_check.length >= 6) {
-             const header_main_view = new DataView(encrypted_bytes_payload_for_check.buffer, 0, 6);
-             is_signed_flag_from_file = header_main_view.getUint8(5);
+            const header_main_view = new DataView(encrypted_bytes_payload_for_check.buffer, 0, 6);
+            is_signed_flag_from_file = header_main_view.getUint8(5);
         } else {
-             console.warn("Encrypted message too short to check signed flag. Assuming unsigned.");
+            console.warn("Encrypted message too short to check signed flag. Assuming unsigned.");
         }
 
         const publicKeyForVerificationContainer = document.getElementById('publicKeyForVerificationContainer');
+        publicKeyForVerificationContainer.style.display = verifySignatureDecryptCheckbox.checked ? 'block' : 'none';
 
+
+        let publicSigningKey = null;
         if (verifySignatureDecryptCheckbox.checked) {
-            publicKeyForVerificationContainer.style.display = 'block';
             if (is_signed_flag_from_file === 0) {
+
                 throw new Error("Message is not signed, but 'Verify Signature' option is enabled. Disable it or load a signed message.");
             }
+
             if (!publicKeyInputDecryptVerify) {
-                throw new Error("Please upload the sender's public key for signature verification.");
+                console.warn("Sender's public key not provided for signature verification. Decrypting, but signature will not be verified.");
+                statusElement.textContent = `Warning: Signature verification skipped. No public key provided. \t ${(performance.now() - startTime).toFixed(2)} ms`;
+                statusElement.classList.add('warning');
+            } else {
+                publicSigningKey = parseKey(publicKeyInputDecryptVerify);
+                if (!publicSigningKey.e || !publicSigningKey.n) {
+                    throw new Error("Invalid sender's public key format for verification. Expected a key with 'e' and 'n'.");
+                }
             }
         } else {
-            publicKeyForVerificationContainer.style.display = 'none';
             document.getElementById('publicKeyInputDecryptVerify').value = '';
         }
 
-        let publicSigningKey = null;
-        if (verifySignatureDecryptCheckbox.checked && is_signed_flag_from_file === 1) {
-            publicSigningKey = parseKey(publicKeyInputDecryptVerify);
-            if (!publicSigningKey.e || !publicSigningKey.n) {
-                throw new Error("Invalid sender's public key format for verification. Expected a key with 'e' and 'n'.");
-            }
-        }
-
-        const decryptedText = await decryptData(rawEncryptedBase64, privateKeyRecipient, publicSigningKey);
+        const decryptedText = await decryptData(rawEncryptedBase64, privateKeyRecipient, publicSigningKey, statusElement, startTime);
         document.getElementById('decryptedOutput').value = decryptedText;
+
     } catch (error) {
         statusElement.textContent = `Decryption error: ${error.message}`;
         statusElement.classList.add('error');
@@ -1020,15 +1123,15 @@ async function handleComputeHash() {
     const algorithm = document.getElementById('hashAlgorithm').value;
     const statusElement = document.getElementById('hashStatus');
     const outputElement = document.getElementById('hashOutput');
-    statusElement.textContent = "Computing hash...";
+    
+    const startTime = performance.now();
+    statusElement.textContent = `Computing hash... \t ${(performance.now() - startTime).toFixed(2)} ms`;
     statusElement.classList.remove('success', 'error');
     outputElement.value = '';
 
     try {
-        const hash = await computeHash(message, algorithm);
+        const hash = await computeHash(message, algorithm, statusElement, startTime);
         outputElement.value = hash;
-        statusElement.textContent = `Hash (${algorithm}) successfully computed!`;
-        statusElement.classList.add('success');
     } catch (error) {
         statusElement.textContent = `Error computing hash: ${error.message}`;
         statusElement.classList.add('error');
@@ -1041,17 +1144,19 @@ async function handleSignMessage() {
     const privateKeyInput = document.getElementById('privateKeyInputSign').value;
     const statusElement = document.getElementById('signStatus');
     const signatureOutput = document.getElementById('signatureOutput');
-    statusElement.textContent = "Signing message...";
+    
+    const startTime = performance.now();
+    statusElement.textContent = `Signing message... \t ${(performance.now() - startTime).toFixed(2)} ms`;
     statusElement.classList.remove('success', 'error');
     signatureOutput.value = '';
 
     if (!message) {
-        statusElement.textContent = "Error: Please enter a message to sign.";
+        statusElement.textContent = `Error: Please enter a message to sign. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
     if (!privateKeyInput) {
-        statusElement.textContent = "Error: Please paste or upload your private key for signing.";
+        statusElement.textContent = `Error: Please paste or upload your private key for signing. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
@@ -1061,16 +1166,13 @@ async function handleSignMessage() {
         if (!privateKey.d || !privateKey.n) {
             throw new Error("Invalid private key format. Expected a key with 'd' and 'n'.");
         }
-        const hashAlgorithm = 'SHA-256';
-        const hashHex = await computeHash(message, hashAlgorithm);
+        
+        const rawSignatureBase64 = await signMessageRaw(message, privateKey, statusElement, startTime);
+        const hashHex = await computeHash(message, 'SHA-256', {textContent: '', classList: {add:()=>{}, remove:()=>{}}}, performance.now());
 
-        const rawSignatureBase64 = await signMessageRaw(message, privateKey);
-        const formattedSigned = formatSignedMessage(message, rawSignatureBase64, hashAlgorithm, hashHex);
+        const formattedSigned = formatSignedMessage(message, rawSignatureBase64, 'SHA-256', hashHex);
 
         signatureOutput.value = formattedSigned;
-        statusElement.textContent = "Message successfully signed!";
-        statusElement.classList.add('success');
-
     } catch (error) {
         statusElement.textContent = `Signing error: ${error.message}`;
         statusElement.classList.add('error');
@@ -1082,16 +1184,18 @@ async function handleVerifySignature() {
     const signedMessageInput = document.getElementById('signedMessageToVerify').value;
     const publicKeyInput = document.getElementById('publicKeyInputVerify').value;
     const statusElement = document.getElementById('verifyStatus');
-    statusElement.textContent = "Verifying signature...";
+    
+    const startTime = performance.now();
+    statusElement.textContent = `Verifying signature... \t ${(performance.now() - startTime).toFixed(2)} ms`;
     statusElement.classList.remove('success', 'error');
 
     if (!signedMessageInput) {
-        statusElement.textContent = "Error: Please paste or upload a signed message.";
+        statusElement.textContent = `Error: Please paste or upload a signed message. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
     if (!publicKeyInput) {
-        statusElement.textContent = "Error: Please paste or upload the sender's public key.";
+        statusElement.textContent = `Error: Please paste or upload the sender's public key. \t ${(performance.now() - startTime).toFixed(2)} ms`;
         statusElement.classList.add('error');
         return;
     }
@@ -1105,17 +1209,10 @@ async function handleVerifySignature() {
         }
 
         if (hashAlgorithm !== 'SHA-256') {
-             console.warn(`Hash algorithm in signed message (${hashAlgorithm}) is not SHA-256. This implementation only supports SHA-256 for signature verification.`);
+            console.warn(`Hash algorithm in signed message (${hashAlgorithm}) is not SHA-256. This implementation only supports SHA-256 for signature verification.`);
         }
 
-        const isValid = await verifySignatureRaw(originalMessage, signatureBase64, publicKey);
-        if (isValid) {
-            statusElement.textContent = "Signature is valid: message is unaltered and from the sender!";
-            statusElement.classList.add('success');
-        } else {
-            statusElement.textContent = "Signature is invalid: message has been altered or signature is not from this key.";
-            statusElement.classList.add('error');
-        }
+        const isValid = await verifySignatureRaw(originalMessage, signatureBase64, publicKey, statusElement, startTime);
     } catch (error) {
         statusElement.textContent = `Verification error: ${error.message}`;
         statusElement.classList.add('error');
