@@ -319,8 +319,6 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
     const encrypted_payload_only = encrypted_bytes_payload.slice(10 + hash_payload_len);
 
     const ciphertext_block_size = Math.ceil(n_recipient.toString(2).length / 8);
-    // Это размер блока, который БЫЛ ЗАШИФРОВАН.
-    // maxBlockSize из encryptData = keyByteLength_recipient - 1.
     const original_data_block_size_before_encryption = ciphertext_block_size - 1;
 
     if (encrypted_payload_only.length % ciphertext_block_size !== 0) {
@@ -374,7 +372,6 @@ async function decryptData(encryptedBase64, private_key_recipient, public_signin
         final_decoded_data = decrypted_full_data.slice(0, decrypted_full_data.length - detected_padding_val);
     }
 
-    // Окончательная проверка длины и обрезка до original_data_len
     if (final_decoded_data.length !== original_data_len) {
         console.warn(
             `Warning: Final decrypted data length (${final_decoded_data.length}) after padding removal does not match original length (${original_data_len}). ` +
