@@ -1,5 +1,5 @@
-<p align="center"><a href="#"><img src="https://img.shields.io/badge/project_quality-shitty_educational_demo-blue?style=flat" alt="Project Quality Badge"></a></p>
-<p align="center"><a href="#"><img src="https://img.shields.io/github/stars/youtyay/SAF?style=flat" alt="Project Quality Badge"></a></p>
+<p align="left"><a href="#"><img src="https://img.shields.io/badge/project_quality-shitty_educational_demo-blue?style=flat" alt="Project Quality Badge"></a></p>
+<p align="left"><a href="#"><img src="https://img.shields.io/github/stars/youtyay/SAF?style=flat" alt="Project Quality Badge"></a></p>
 
 <b>SAF(e) <i>(Simple As Fuck Encryption)</i></b> - A simplified (and unsafe) version of RSA for educational purposes and cryptographic fun.
 
